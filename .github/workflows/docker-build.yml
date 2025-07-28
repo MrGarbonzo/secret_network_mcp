@@ -31,6 +31,9 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      
+    - name: Set repository owner to lowercase
+      run: echo "REPO_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
         
     - name: Lowercase the repo name
       run: echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
@@ -39,7 +42,7 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.REPO }}
+        images: ghcr.io/${{ env.REPO_OWNER }}/secret_network_mcp
         tags: |
           type=ref,event=branch
           type=ref,event=pr
