@@ -13,7 +13,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc && chmod 755 build/index.js && chmod 755 build/http-server.js",
+    "prebuild": "rm -rf build",
+    "build": "tsc --pretty && if [ -d build ]; then find build -name '*.js' -exec chmod 755 {} +; fi",
     "start": "node build/http-server.js",
     "start:mcp": "node build/index.js",
     "start:http": "node build/http-server.js",

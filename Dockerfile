@@ -9,13 +9,13 @@ RUN apk add --no-cache curl
 COPY package*.json ./
 
 # Install dependencies (including dev dependencies for build)
-RUN npm ci
+RUN npm ci --verbose
 
 # Copy source code
 COPY . .
 
-# Build TypeScript
-RUN npm run build
+# Build TypeScript with better error reporting
+RUN npm run build || (echo "Build failed. Checking TypeScript compilation:" && npx tsc --noEmit --pretty && exit 1)
 
 # Expose port
 EXPOSE 8002
