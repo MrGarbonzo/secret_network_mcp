@@ -371,13 +371,15 @@ async function startServer(): Promise<void> {
     // Initialize Secret Network client
     await initializeSecretClient();
     
-    // Start HTTP server
-    app.listen(PORT, () => {
+    // Start HTTP server - bind to 0.0.0.0 to accept external connections
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`Secret Network MCP HTTP Server started successfully`);
-      console.log(`Server running on port: ${PORT}`);
+      console.log(`Server running on 0.0.0.0:${PORT}`);
+      console.log(`External access: http://67.215.13.113:${PORT}`);
       console.log(`Health check: http://localhost:${PORT}/api/health`);
       console.log(`Tools list: http://localhost:${PORT}/api/mcp/tools/list`);
       console.log(`Tool execution: POST http://localhost:${PORT}/api/mcp/tools/call`);
+      console.log(`Ready to accept connections from secretGPT hub`);
     });
   } catch (error) {
     console.error('Failed to start Secret Network MCP HTTP Server:', error);
