@@ -2,7 +2,6 @@
   "name": "@secretgpt/secret-network-mcp-server",
   "version": "1.0.0",
   "description": "A comprehensive MCP server for interacting with the Secret Network blockchain - Query tools for DeFi, staking, governance, and privacy features",
-  "type": "module",
   "main": "./build/index.js",
   "bin": {
     "secret-network-mcp-server": "./build/index.js"

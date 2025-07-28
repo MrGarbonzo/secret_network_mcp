@@ -26,14 +26,8 @@ RUN echo "=== Source files ===" && \
     echo "=== TypeScript version ===" && \
     npx tsc --version
 
-# Build TypeScript with maximum verbosity
-RUN echo "=== Starting build ===" && \
-    npm run build || \
-    (echo "=== Build failed, running tsc directly ===" && \
-     npx tsc --listFiles --extendedDiagnostics || \
-     (echo "=== TypeScript failed, checking for specific issues ===" && \
-      npx tsc --noEmit --listFiles && \
-      exit 1))
+# Build TypeScript - run directly to see errors
+RUN npx tsc || (echo "TypeScript compilation failed" && exit 1)
 
 # Expose port
 EXPOSE 8002

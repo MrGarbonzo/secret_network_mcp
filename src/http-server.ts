@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { SecretNetworkClient } from 'secretjs';
 
 const app = express();
-const PORT = process.env.PORT || 8002;
+const PORT = parseInt(process.env.PORT || '8002', 10);
 
 // Middleware
 app.use(helmet());
