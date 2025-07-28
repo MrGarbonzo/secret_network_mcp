@@ -2,9 +2,9 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [ main, master, responses, security, attest_fixes, website, mcp ]
+    branches: [ main, master, responses, security, attest_fixes, website, mcp, scrt ]
   pull_request:
-    branches: [ main, master, responses, security, attest_fixes, website, mcp ]
+    branches: [ main, master, responses, security, attest_fixes, website, mcp, scrt ]
 
 env:
   REGISTRY: ghcr.io
@@ -30,13 +30,6 @@ jobs:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-        
-    - name: Debug authentication
-      run: |
-        echo "Registry: ${{ env.REGISTRY }}"
-        echo "Image name: ${{ env.IMAGE_NAME }}" 
-        echo "Actor: ${{ github.actor }}"
-        echo "Repository: ${{ github.repository }}"
 
     - name: Extract metadata
       id: meta
@@ -49,28 +42,12 @@ jobs:
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: Build Docker image
+    - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
-        push: false
+        push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        
-    - name: Create GHCR package and push
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: |
-        # Try to create the package first by pushing a simple tag
-        echo "Creating GHCR package for first time..."
-        docker build -t ghcr.io/${{ github.repository }}:latest .
-        
-        # Try pushing with explicit package creation
-        echo "Attempting to push to GHCR..."
-        docker push ghcr.io/${{ github.repository }}:latest || {
-          echo "First push failed, trying with lowercase..."
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          docker tag ghcr.io/${{ github.repository }}:latest ghcr.io/${REPO_LOWER}:latest
-          docker push ghcr.io/${REPO_LOWER}:latest
-        }
