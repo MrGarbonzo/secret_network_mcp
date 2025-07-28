@@ -14,8 +14,11 @@ RUN npm ci --verbose
 # Copy source code
 COPY . .
 
+# Debug: List source files
+RUN echo "Source files:" && ls -la src/
+
 # Build TypeScript with better error reporting
-RUN npm run build || (echo "Build failed. Checking TypeScript compilation:" && npx tsc --noEmit --pretty && exit 1)
+RUN npm run build 2>&1 || (echo "Build failed with exit code $?. Output above." && exit 1)
 
 # Expose port
 EXPOSE 8002
