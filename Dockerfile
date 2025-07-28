@@ -14,11 +14,26 @@ RUN npm ci --verbose
 # Copy source code
 COPY . .
 
-# Debug: List source files
-RUN echo "Source files:" && ls -la src/
+# Debug: List source files and check permissions
+RUN echo "=== Source files ===" && \
+    ls -la src/ && \
+    echo "=== Package.json ===" && \
+    cat package.json && \
+    echo "=== Node version ===" && \
+    node --version && \
+    echo "=== NPM version ===" && \
+    npm --version && \
+    echo "=== TypeScript version ===" && \
+    npx tsc --version
 
-# Build TypeScript with better error reporting
-RUN npm run build 2>&1 || (echo "Build failed with exit code $?. Output above." && exit 1)
+# Build TypeScript with maximum verbosity
+RUN echo "=== Starting build ===" && \
+    npm run build || \
+    (echo "=== Build failed, running tsc directly ===" && \
+     npx tsc --listFiles --extendedDiagnostics || \
+     (echo "=== TypeScript failed, checking for specific issues ===" && \
+      npx tsc --noEmit --listFiles && \
+      exit 1))
 
 # Expose port
 EXPOSE 8002

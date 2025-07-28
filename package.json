@@ -14,7 +14,8 @@
   ],
   "scripts": {
     "prebuild": "rm -rf build",
-    "build": "tsc --pretty && if [ -d build ]; then find build -name '*.js' -exec chmod 755 {} +; fi",
+    "build": "tsc",
+    "postbuild": "if [ -d build ]; then find build -name '*.js' -exec chmod 755 {} +; fi",
     "start": "node build/http-server.js",
     "start:mcp": "node build/index.js",
     "start:http": "node build/http-server.js",
