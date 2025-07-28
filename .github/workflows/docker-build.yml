@@ -49,12 +49,28 @@ jobs:
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
 
-    - name: Build and push Docker image
+    - name: Build Docker image
       uses: docker/build-push-action@v5
       with:
         context: .
-        push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        push: false
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        
+    - name: Create GHCR package and push
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        # Try to create the package first by pushing a simple tag
+        echo "Creating GHCR package for first time..."
+        docker build -t ghcr.io/${{ github.repository }}:latest .
+        
+        # Try pushing with explicit package creation
+        echo "Attempting to push to GHCR..."
+        docker push ghcr.io/${{ github.repository }}:latest || {
+          echo "First push failed, trying with lowercase..."
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          docker tag ghcr.io/${{ github.repository }}:latest ghcr.io/${REPO_LOWER}:latest
+          docker push ghcr.io/${REPO_LOWER}:latest
+        }
