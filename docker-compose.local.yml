@@ -1,0 +1,26 @@
+services:
+  secret-network-mcp:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - NODE_ENV=production
+      - SECRET_NODE_URL=https://api.secret.network
+      - SECRET_CHAIN_ID=secret-4
+      - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - mcp_network
+
+networks:
+  mcp_network:
+    driver: bridge
