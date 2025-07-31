@@ -1,42 +1,28 @@
-# Secret Network MCP - Keplr SDK Integration Plan
+# Secret Network MCP - Complete Keplr Integration Plan
 
-**Last Updated:** July 28, 2025
-**Status:** Plan to add Keplr SDK to existing secret_network_mcp server
+**Last Updated:** July 30, 2025
+**Status:** Comprehensive implementation plan combining original design with Keplr documentation insights
 
 ## 🎯 **Goal:**
-Add Keplr SDK and wallet endpoints to the existing secret_network_mcp HTTP server to handle wallet operations in a dedicated TEE.
+Build wallet infrastructure for secretgptee webUI with Keplr integration, connecting through verified message bridge to secret_network_mcp server.
 
-## 📋 **Current State Analysis:**
+## 📋 **Architecture Overview:**
 
-### **Existing secret_network_mcp Structure:**
 ```
-F:\coding\secret_network_mcp\
-├── src\
-│   ├── index.ts (MCP stdio server)
-│   └── http-server.ts (HTTP API server)
-├── package.json
-├── tsconfig.json
-└── README.md
+VM1: secretGPT Hub
+├── attestAI webUI (existing)
+└── secretgptee webUI (NEW - Keplr integration)
+         ↓
+    [Verified Message Bridge] (Future: Attestation-based)
+         ↓
+VM2: secret_network_mcp (wallet infrastructure)
 ```
-
-### **Current HTTP Server Features:**
-- ✅ Port 8002 HTTP API
-- ✅ Secret Network tools (balance queries, network status)
-- ✅ MCP tool execution endpoints
-- ✅ Health check endpoints
 
 ## 🔧 **Implementation Plan:**
 
-### **Step 1: Add Keplr SDK Dependencies**
+### **Phase 1: secret_network_mcp Wallet Infrastructure**
 
-#### **Update package.json:**
-```bash
-cd F:\coding\secret_network_mcp
-npm install @keplr-wallet/provider-extension @keplr-wallet/types
-npm install --save-dev @types/node
-```
-
-#### **Updated Dependencies:**
+#### **Update Dependencies (package.json):**
 ```json
 {
   "dependencies": {
@@ -46,7 +32,6 @@ npm install --save-dev @types/node
     "@cosmjs/stargate": "^0.31.3",
     "@cosmjs/tendermint-rpc": "^0.33.1",
     "@modelcontextprotocol/sdk": "^1.13.0",
-    "@keplr-wallet/provider-extension": "^0.12.29",
     "@keplr-wallet/types": "^0.12.29",
     "axios": "^1.6.0",
     "cors": "^2.8.5",
@@ -58,8 +43,6 @@ npm install --save-dev @types/node
 }
 ```
 
-### **Step 2: Create Wallet Service**
-
 #### **Create `src/wallet-service.ts`:**
 ```typescript
 import { SecretNetworkClient } from 'secretjs';
@@ -68,6 +51,7 @@ export interface WalletConnection {
   success: boolean;
   address?: string;
   name?: string;
+  isHardwareWallet?: boolean;
   error?: string;
 }
 
@@ -76,6 +60,14 @@ export interface BalanceResult {
   balance?: string;
   denom?: string;
   formatted?: string;
+  error?: string;
+}
+
+export interface TransactionStatus {
+  success: boolean;
+  txHash?: string;
+  status?: 'pending' | 'success' | 'failed';
+  blockHeight?: number;
   error?: string;
 }
 
@@ -89,9 +81,13 @@ export class WalletService {
   }
 
   /**
-   * Handle wallet connection - Server-side approach for TEE demo
+   * Connect wallet - Store wallet info from secretgptee webUI
    */
-  async connectWallet(address: string, name?: string): Promise<WalletConnection> {
+  async connectWallet(
+    address: string, 
+    name?: string, 
+    isHardwareWallet?: boolean
+  ): Promise<WalletConnection> {
     try {
       // Validate Secret Network address format
       if (!address.startsWith('secret1') || address.length !== 45) {
@@ -111,17 +107,19 @@ export class WalletService {
         };
       }
 
-      // Store connection info (demo purposes)
+      // Store connection info
       this.connectedWallets.set(address, {
         address,
-        name: name || "Demo Wallet",
+        name: name || "Keplr Wallet",
+        isHardwareWallet: isHardwareWallet || false,
         connectedAt: new Date().toISOString()
       });
 
       return {
         success: true,
         address,
-        name: name || "Demo Wallet"
+        name: name || "Keplr Wallet",
+        isHardwareWallet
       };
 
     } catch (error) {
@@ -133,11 +131,10 @@ export class WalletService {
   }
 
   /**
-   * Get wallet balance using existing Secret Network client
+   * Get wallet balance
    */
   async getWalletBalance(address: string): Promise<BalanceResult> {
     try {
-      // Use existing SecretJS client to query balance
       const balance = await this.secretClient.query.bank.balance({
         address,
         denom: "uscrt"
@@ -157,6 +154,36 @@ export class WalletService {
       return {
         success: false,
         error: `Failed to get balance: ${error.message}`
+      };
+    }
+  }
+
+  /**
+   * Monitor transaction status by hash
+   * (Since Keplr handles broadcasting, we just check status)
+   */
+  async getTransactionStatus(txHash: string): Promise<TransactionStatus> {
+    try {
+      const tx = await this.secretClient.query.getTx(txHash);
+      
+      if (!tx) {
+        return {
+          success: false,
+          error: "Transaction not found"
+        };
+      }
+
+      return {
+        success: true,
+        txHash,
+        status: tx.code === 0 ? 'success' : 'failed',
+        blockHeight: tx.height
+      };
+
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to get transaction status: ${error.message}`
       };
     }
   }
@@ -187,56 +214,33 @@ export class WalletService {
       lastUpdate: new Date().toISOString()
     };
   }
-
-  /**
-   * Future: Transaction signing with Keplr SDK
-   * This will be implemented when we add browser interaction
-   */
-  async signTransaction(txData: any): Promise<any> {
-    // Placeholder for future Keplr signing integration
-    return {
-      success: false,
-      error: "Transaction signing not yet implemented"
-    };
-  }
 }
 ```
 
-### **Step 3: Add Wallet Endpoints to HTTP Server**
-
-#### **Update `src/http-server.ts`:**
+#### **Update `src/http-server.ts` - Add Wallet Endpoints:**
 ```typescript
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import { SecretNetworkClient } from 'secretjs';
 import { WalletService } from './wallet-service.js';
 
-// Existing imports and setup...
-
-// Add wallet service initialization
+// Initialize wallet service
 let walletService: WalletService | null = null;
 
-// Initialize wallet service after Secret Network client is ready
 async function initializeWalletService(): Promise<void> {
   try {
     if (secretClient) {
       walletService = new WalletService(secretClient);
       console.log('Wallet service initialized successfully');
-    } else {
-      console.error('Cannot initialize wallet service: Secret Network client not available');
     }
   } catch (error) {
     console.error('Failed to initialize wallet service:', error);
   }
 }
 
-// Add wallet endpoints to existing Express app
+// Add wallet routes
 function setupWalletRoutes(app: express.Application): void {
   
   /**
    * POST /api/wallet/connect
-   * Connect a wallet using address
+   * Receive wallet connection from secretgptee webUI
    */
   app.post('/api/wallet/connect', async (req, res) => {
     try {
@@ -247,7 +251,7 @@ function setupWalletRoutes(app: express.Application): void {
         });
       }
 
-      const { address, name } = req.body;
+      const { address, name, isHardwareWallet } = req.body;
       
       if (!address) {
         return res.status(400).json({
@@ -256,7 +260,7 @@ function setupWalletRoutes(app: express.Application): void {
         });
       }
 
-      const result = await walletService.connectWallet(address, name);
+      const result = await walletService.connectWallet(address, name, isHardwareWallet);
       res.json(result);
 
     } catch (error) {
@@ -270,7 +274,6 @@ function setupWalletRoutes(app: express.Application): void {
 
   /**
    * GET /api/wallet/balance/:address
-   * Get wallet balance for address
    */
   app.get('/api/wallet/balance/:address', async (req, res) => {
     try {
@@ -295,8 +298,33 @@ function setupWalletRoutes(app: express.Application): void {
   });
 
   /**
+   * GET /api/wallet/transaction/:txHash
+   * Check transaction status after Keplr broadcasting
+   */
+  app.get('/api/wallet/transaction/:txHash', async (req, res) => {
+    try {
+      if (!walletService) {
+        return res.status(503).json({
+          success: false,
+          error: "Wallet service not available"
+        });
+      }
+
+      const { txHash } = req.params;
+      const result = await walletService.getTransactionStatus(txHash);
+      res.json(result);
+
+    } catch (error) {
+      console.error('Transaction status error:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  /**
    * GET /api/wallet/info/:address
-   * Get connected wallet information
    */
   app.get('/api/wallet/info/:address', async (req, res) => {
     try {
@@ -333,7 +361,6 @@ function setupWalletRoutes(app: express.Application): void {
 
   /**
    * DELETE /api/wallet/disconnect/:address
-   * Disconnect wallet
    */
   app.delete('/api/wallet/disconnect/:address', async (req, res) => {
     try {
@@ -363,7 +390,6 @@ function setupWalletRoutes(app: express.Application): void {
 
   /**
    * GET /api/wallet/status
-   * Get wallet service status
    */
   app.get('/api/wallet/status', async (req, res) => {
     try {
@@ -389,31 +415,28 @@ function setupWalletRoutes(app: express.Application): void {
   console.log('Wallet routes configured');
 }
 
-// Update the main server initialization
+// Update server initialization
 async function startServer(): Promise<void> {
   try {
-    // Initialize Secret Network client (existing code)
     await initializeSecretClient();
-    
-    // Initialize wallet service
     await initializeWalletService();
     
     // Setup existing MCP routes
-    // ... existing route setup code ...
+    // ... existing code ...
     
     // Setup new wallet routes
     setupWalletRoutes(app);
     
-    // Start server
     const port = process.env.PORT || 8002;
-    app.listen(port, () => {
+    app.listen(port, '0.0.0.0', () => {
       console.log(`Secret Network MCP Server running on port ${port}`);
       console.log('Available endpoints:');
       console.log('  GET  /api/health - Health check');
       console.log('  GET  /api/mcp/tools/list - List MCP tools');
       console.log('  POST /api/mcp/tools/call - Execute MCP tool');
-      console.log('  POST /api/wallet/connect - Connect wallet');
-      console.log('  GET  /api/wallet/balance/:address - Get balance');
+      console.log('  POST /api/wallet/connect - Connect wallet from secretgptee');
+      console.log('  GET  /api/wallet/balance/:address - Get SCRT balance');
+      console.log('  GET  /api/wallet/transaction/:txHash - Check tx status');
       console.log('  GET  /api/wallet/info/:address - Get wallet info');
       console.log('  GET  /api/wallet/status - Wallet service status');
       console.log('  DELETE /api/wallet/disconnect/:address - Disconnect wallet');
@@ -426,56 +449,198 @@ async function startServer(): Promise<void> {
 }
 ```
 
-### **Step 4: Update TypeScript Configuration**
+### **Phase 2: secretgptee WebUI (VM1)**
 
-#### **Update `tsconfig.json`:**
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "node",
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "allowJs": true,
-    "outDir": "./build",
-    "rootDir": "./src",
-    "strict": true,
-    "declaration": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "types": ["node"]
-  },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "build", "test*"]
-}
-```
+#### **Keplr Integration Frontend:**
+```javascript
+// secretgptee webUI - Keplr connection flow
+class SecretGPTeeWallet {
+  constructor() {
+    this.chainId = "secret-4";
+    this.connectedAddress = null;
+  }
 
-### **Step 5: Update Build Scripts**
+  /**
+   * Connect to Keplr wallet
+   */
+  async connectWallet() {
+    try {
+      // Check if Keplr is available
+      if (!window.keplr) {
+        throw new Error("Please install Keplr extension");
+      }
 
-#### **Update `package.json` scripts:**
-```json
-{
-  "scripts": {
-    "prebuild": "rm -rf build",
-    "build": "tsc",
-    "postbuild": "if [ -d build ]; then find build -name '*.js' -exec chmod 755 {} +; fi",
-    "start": "node build/http-server.js",
-    "start:mcp": "node build/index.js",
-    "start:http": "node build/http-server.js",
-    "start:wallet": "npm run build && npm run start:http",
-    "dev": "tsc --watch",
-    "dev:http": "tsc && node build/http-server.js",
-    "test:wallet": "npm run build && node -e \"console.log('Testing wallet endpoints...'); process.exit(0)\"",
-    "inspect": "npx @modelcontextprotocol/inspector build/index.js",
-    "test": "node test-server.js",
-    "validate": "npm run build && npm run test && npm run inspect"
+      // Enable connection to Secret Network
+      await window.keplr.enable(this.chainId);
+
+      // Get wallet details
+      const key = await window.keplr.getKey(this.chainId);
+
+      // Send wallet info to secretGPT Hub
+      const response = await fetch('/api/secretgptee/wallet/connect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          address: key.bech32Address,
+          name: key.name,
+          isHardwareWallet: key.isNanoLedger || key.isKeystone
+        })
+      });
+
+      const result = await response.json();
+      
+      if (result.success) {
+        this.connectedAddress = key.bech32Address;
+        this.updateUI(key);
+        return key;
+      } else {
+        throw new Error(result.error);
+      }
+
+    } catch (error) {
+      console.error('Wallet connection failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Send SCRT transaction (basic transfer)
+   */
+  async sendTransaction(toAddress, amount) {
+    try {
+      if (!this.connectedAddress) {
+        throw new Error("Wallet not connected");
+      }
+
+      // Build transaction using Keplr's signing
+      const offlineSigner = window.keplr.getOfflineSigner(this.chainId);
+      const accounts = await offlineSigner.getAccounts();
+      const enigmaUtils = window.keplr.getEnigmaUtils(this.chainId);
+
+      // Initialize SecretJS with Keplr
+      const secretjs = new SecretNetworkClient({
+        url: "https://api.secret.network",
+        chainId: this.chainId,
+        wallet: offlineSigner,
+        walletAddress: accounts[0].address,
+        encryptionUtils: enigmaUtils,
+      });
+
+      // Build and sign transaction
+      const tx = await secretjs.tx.bank.send(
+        {
+          from_address: this.connectedAddress,
+          to_address: toAddress,
+          amount: [{ denom: "uscrt", amount: String(amount * 1000000) }]
+        },
+        {
+          gasLimit: 200000,
+        }
+      );
+
+      // Keplr handles broadcasting
+      console.log("Transaction hash:", tx.transactionHash);
+      
+      // Check transaction status via secret_network_mcp
+      await this.checkTransactionStatus(tx.transactionHash);
+      
+      return tx.transactionHash;
+
+    } catch (error) {
+      console.error('Transaction failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check transaction status
+   */
+  async checkTransactionStatus(txHash) {
+    try {
+      const response = await fetch(`/api/secretgptee/transaction/${txHash}`);
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Failed to check transaction status:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update UI with wallet info
+   */
+  updateUI(key) {
+    // Update secretgptee webUI with wallet details
+    document.getElementById('wallet-address').textContent = key.bech32Address;
+    document.getElementById('wallet-name').textContent = key.name;
+    document.getElementById('hardware-wallet').textContent = 
+      key.isNanoLedger || key.isKeystone ? 'Hardware' : 'Software';
   }
 }
 ```
 
-### **Step 6: Environment Configuration**
+### **Phase 3: secretGPT Hub Integration (VM1)**
+
+#### **New Endpoints for secretgptee:**
+```typescript
+// secretGPT Hub - Proxy endpoints for secretgptee
+app.post('/api/secretgptee/wallet/connect', async (req, res) => {
+  try {
+    // Forward to secret_network_mcp via verified bridge
+    const response = await fetch('http://secret-network-mcp:8002/api/wallet/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+    
+    const result = await response.json();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/secretgptee/transaction/:txHash', async (req, res) => {
+  try {
+    const { txHash } = req.params;
+    const response = await fetch(`http://secret-network-mcp:8002/api/wallet/transaction/${txHash}`);
+    const result = await response.json();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+```
+
+## 🎯 **Key Implementation Benefits:**
+
+### **Simplified Architecture:**
+- 🚀 **Keplr handles broadcasting** - No complex transaction broadcasting in secret_network_mcp
+- 🔐 **Browser-only signing** - Private keys never leave Keplr
+- 🛡️ **Clean separation** - UI handles wallet, server handles queries
+- 📡 **Status monitoring** - Track transactions after Keplr broadcasts
+
+### **Hardware Wallet Support:**
+- 🔧 **Automatic detection** - Identify Ledger/Keystone wallets
+- ⚙️ **Appropriate signing modes** - Handle hardware wallet limitations
+- 🔒 **Enhanced security** - Hardware wallet compatibility
+
+### **Future Ready:**
+- 🔗 **Verified bridge preparation** - API structured for attestation
+- 📈 **Expandable features** - Framework for staking, governance, trading
+- 🎮 **Multiple webUI support** - attestAI + secretgptee parallel operation
+
+## 📝 **Implementation Sequence:**
+
+1. ✅ **secret_network_mcp wallet infrastructure** - Phase 1
+2. ✅ **secretgptee webUI Keplr integration** - Phase 2  
+3. ✅ **secretGPT Hub proxy endpoints** - Phase 3
+4. 🔄 **Testing & validation** - End-to-end flow
+5. 🚀 **Production deployment** - Docker + verified bridge
+
+## 🔧 **Environment Configuration:**
 
 #### **Create `.env.example`:**
 ```bash
@@ -496,12 +661,12 @@ WALLET_MAX_CONNECTIONS=100
 LOG_LEVEL=info
 ```
 
-### **Step 7: Testing the Integration**
+## 🧪 **Testing the Integration:**
 
 #### **Test Wallet Endpoints:**
 ```bash
 # Build and start server
-npm run start:wallet
+npm run build && npm start
 
 # Test wallet status
 curl http://localhost:8002/api/wallet/status
@@ -514,35 +679,31 @@ curl -X POST http://localhost:8002/api/wallet/connect \
 # Test balance query
 curl http://localhost:8002/api/wallet/balance/secret1test...
 
+# Test transaction status
+curl http://localhost:8002/api/wallet/transaction/ABC123...
+
 # Test health check (existing)
 curl http://localhost:8002/api/health
 ```
 
-## 🎯 **Benefits of This Implementation:**
+## 📚 **Keplr Integration Reference:**
 
-### **TEE Integration:**
-- 🔐 **Wallet isolation** - All wallet operations in dedicated TEE
-- 🛡️ **Secure communication** - Ready for attestation-based signing
-- 🔏 **Clean separation** - Wallet logic separate from frontend
+### **Key Keplr API Methods:**
+```javascript
+// Enable connection
+await window.keplr.enable("secret-4");
 
-### **Demo Features:**
-- 📱 **Simple connection** - Address-based connection for demo
-- 💰 **Balance queries** - Real Secret Network balance data
-- 🎮 **Status monitoring** - Wallet service health tracking
-- 🔄 **Easy testing** - Clear API endpoints for validation
+// Get wallet details
+const key = await window.keplr.getKey("secret-4");
+// Returns: { name, bech32Address, isNanoLedger, isKeystone, ... }
 
-### **Future Ready:**
-- 🚀 **Transaction signing** - Framework ready for Keplr integration
-- 📡 **Message signing** - Architecture supports attestation verification
-- 🧩 **Expandable** - Easy to add more wallet features
+// Transaction broadcasting (handled by Keplr)
+const txResponse = await keplr.sendTx("secret-4", protobufTx, "block");
+```
 
-## 📝 **Implementation Steps:**
+### **Hardware Wallet Detection:**
+- **Ledger**: `key.isNanoLedger === true`
+- **Keystone**: `key.isKeystone === true`
+- **Software**: Both flags are `false`
 
-1. ✅ **Add dependencies** - Keplr SDK packages
-2. ✅ **Create WalletService** - Core wallet operations
-3. ✅ **Add HTTP endpoints** - REST API for wallet operations  
-4. ✅ **Update build config** - TypeScript and build scripts
-5. ✅ **Test integration** - Validate all endpoints work
-6. ✅ **Connect to secretGPT** - Integrate with hub proxy
-
-**This plan adds robust wallet capabilities to secret_network_mcp while maintaining the existing MCP functionality and preparing for future attestation-based features.**
+**This comprehensive plan merges the original design with Keplr documentation insights, creating a complete implementation roadmap that leverages Keplr's broadcasting capabilities while maintaining the secure VM separation architecture.**
