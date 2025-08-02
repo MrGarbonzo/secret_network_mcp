@@ -6,7 +6,7 @@ services:
     environment:
       - PORT=8002
       - NODE_ENV=production
-      - SECRET_NODE_URL=https://api.secret.network
+      - SECRET_NODE_URL=https://rpc.ankr.com/http/scrt_cosmos
       - SECRET_CHAIN_ID=secret-4
       - LOG_LEVEL=info
     healthcheck:
