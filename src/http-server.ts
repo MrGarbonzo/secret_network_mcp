@@ -75,6 +75,13 @@ const ContractQuerySchema = z.object({
   query: z.record(z.any()),
 });
 
+const SendTokensSchema = z.object({
+  from_address: z.string().regex(/^secret1[a-z0-9]+$/, 'Invalid Secret Network address'),
+  to_address: z.string().regex(/^secret1[a-z0-9]+$/, 'Invalid Secret Network address'),
+  amount: z.string(),
+  memo: z.string().optional(),
+});
+
 const ToolCallSchema = z.object({
   name: z.string(),
   arguments: z.record(z.any()),
@@ -169,6 +176,34 @@ const tools = [
       type: 'object',
       properties: {},
       required: [],
+    },
+  },
+  {
+    name: 'secret_send_tokens',
+    description: 'Send SCRT tokens to another address',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from_address: {
+          type: 'string',
+          description: 'Sender Secret Network address (secret1...)',
+          pattern: '^secret1[a-z0-9]+$',
+        },
+        to_address: {
+          type: 'string',
+          description: 'Recipient Secret Network address (secret1...)',
+          pattern: '^secret1[a-z0-9]+$',
+        },
+        amount: {
+          type: 'string',
+          description: 'Amount in SCRT (will be converted to uscrt)',
+        },
+        memo: {
+          type: 'string',
+          description: 'Optional transaction memo',
+        },
+      },
+      required: ['from_address', 'to_address', 'amount'],
     },
   },
 ];
@@ -316,6 +351,57 @@ async function executeTool(name: string, args: any): Promise<any> {
                  `Moniker: ${status.default_node_info?.moniker || 'unknown'}`,
           },
         ],
+      };
+    }
+
+    case 'secret_send_tokens': {
+      const { from_address, to_address, amount, memo } = SendTokensSchema.parse(args);
+      
+      // Convert SCRT to uscrt (1 SCRT = 1,000,000 uscrt)
+      const amountUscrt = Math.floor(parseFloat(amount) * 1_000_000).toString();
+      
+      // Validate addresses
+      if (!from_address.startsWith('secret1') || from_address.length !== 45) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Invalid sender address format: ${from_address}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      
+      if (!to_address.startsWith('secret1') || to_address.length !== 45) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Invalid recipient address format: ${to_address}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      
+      // Return transaction details for frontend to sign with Keplr
+      // The frontend should use this data to construct and sign the transaction
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Transaction prepared:\nFrom: ${from_address}\nTo: ${to_address}\nAmount: ${amount} SCRT (${amountUscrt} uscrt)\nMemo: ${memo || 'none'}`,
+          },
+        ],
+        transactionData: {
+          from: from_address,
+          to: to_address,
+          amount: amountUscrt,
+          denom: 'uscrt',
+          memo: memo || '',
+        },
+        requiresKeplrSigning: true,
       };
     }
 
