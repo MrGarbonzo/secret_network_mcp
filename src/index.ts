@@ -27,6 +27,9 @@ const server = new Server(
 // Secret Network client instance
 let secretClient: SecretNetworkClient | null = null;
 
+// Cache for code hashes to avoid repeated lookups
+const codeHashCache = new Map<string, string>();
+
 // Initialize Secret Network client
 async function initializeSecretClient(): Promise<void> {
   try {
@@ -44,6 +47,58 @@ async function initializeSecretClient(): Promise<void> {
   } catch (error) {
     console.error('Failed to initialize Secret Network client:', error);
     throw error;
+  }
+}
+
+// Get code hash for a contract address (with caching)
+async function getCodeHash(contractAddress: string): Promise<string> {
+  // Check cache first
+  if (codeHashCache.has(contractAddress)) {
+    const cached = codeHashCache.get(contractAddress)!;
+    console.error(`Using cached code hash for ${contractAddress}: ${cached}`);
+    return cached;
+  }
+  
+  try {
+    if (!secretClient) {
+      console.error('Secret client not initialized');
+      return '';
+    }
+
+    // Get contract info
+    const contractInfo = await secretClient.query.compute.contractInfo({
+      contract_address: contractAddress
+    });
+    
+    // Extract code ID from the nested structure
+    const codeId = (contractInfo as any).contract_info?.code_id || 
+                   (contractInfo as any).ContractInfo?.code_id ||
+                   (contractInfo as any).code_id;
+    
+    if (!codeId) {
+      console.error('Could not find code ID in contract info');
+      return '';
+    }
+    
+    // Convert code ID to number if it's a string
+    const codeIdNum = typeof codeId === 'string' ? parseInt(codeId, 10) : codeId;
+    
+    // Get code info using code ID
+    const codeInfo = await secretClient.query.compute.code(codeIdNum);
+    const codeHash = (codeInfo as any).code_hash || 
+                     (codeInfo as any).codeHash || 
+                     (codeInfo as any).CodeInfo?.code_hash ||
+                     (codeInfo as any).CodeInfo?.CodeHash;
+    
+    // Cache the result
+    codeHashCache.set(contractAddress, codeHash);
+    console.error(`Resolved code hash for ${contractAddress}: ${codeHash}`);
+    
+    return codeHash;
+  } catch (error) {
+    console.error(`Failed to get code hash for ${contractAddress}:`, error);
+    // Return empty string as fallback - secretjs might be able to resolve it
+    return '';
   }
 }
 
@@ -274,9 +329,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { contractAddress, query } = ContractQuerySchema.parse(args);
         
         try {
+          // Dynamically resolve code hash for the contract
+          const codeHash = await getCodeHash(contractAddress);
+          
           const result = await secretClient.query.compute.queryContract({
             contract_address: contractAddress,
-            code_hash: '', // Will be automatically resolved by secretjs
+            code_hash: codeHash, // Use dynamically resolved hash
             query,
           });
 
