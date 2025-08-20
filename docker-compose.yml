@@ -1,6 +1,7 @@
 services:
   secret-network-mcp:
-    image: ghcr.io/mrgarbonzo/scrt_network_mcp:latest
+    image: ghcr.io/mrgarbonzo/scrt_network_mcp:keplr-tokens
+    pull_policy: never  # Use local image
     ports:
       - "8002:8002"
     environment:
@@ -16,4 +17,3 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-    pull_policy: always
