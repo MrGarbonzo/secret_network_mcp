@@ -1,6 +1,6 @@
 services:
   secret-network-mcp:
-    image: ghcr.io/mrgarbonzo/scrt_network_mcp:latest
+    image: ghcr.io/mrgarbonzo/scrt_network_mcp:keplr-1d0f0fd
     ports:
       - "8002:8002"
     environment:
