@@ -585,6 +585,9 @@ async function executeTool(name: string, args: any): Promise<any> {
     case 'secret_query_token_balance': {
       const { tokenSymbolOrName, address, viewingKey, permit } = TokenBalanceSchema.parse(args);
       
+      console.log(`🔍 Token balance query for ${tokenSymbolOrName}`);
+      console.log(`📋 Args: address=${address}, viewingKey=${viewingKey ? 'present' : 'none'}, permit=${permit ? 'present' : 'none'}`);
+      
       // Find token in registry
       const token = findToken(tokenSymbolOrName);
       if (!token) {
@@ -605,13 +608,17 @@ async function executeTool(name: string, args: any): Promise<any> {
         
         // Format query for token balance
         const query = formatTokenBalanceQuery(address, viewingKey, permit);
+        console.log(`🔑 Formatted query:`, JSON.stringify(query, null, 2));
         
         // Query the token contract
+        console.log(`📞 Querying contract ${token.address} with codeHash ${codeHash}`);
         const result = await secretClient.query.compute.queryContract({
           contract_address: token.address,
           code_hash: codeHash,
           query,
         });
+        
+        console.log(`📊 Raw contract response:`, JSON.stringify(result, null, 2));
         
         // Parse balance result
         const balance = (result as any).balance?.amount || '0';
