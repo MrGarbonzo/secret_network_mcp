@@ -7,8 +7,37 @@
  * SNIP-20/25 Token Queries
  */
 
-// Query token balance
-export function formatTokenBalanceQuery(address: string, viewingKey?: string) {
+// Permit type definition for SNIP-24
+export interface Permit {
+  params: {
+    permit_name: string;
+    allowed_tokens: string[];
+    permissions: string[];
+  };
+  signature: {
+    pub_key: {
+      type: string;
+      value: string;
+    };
+    signature: string;
+  };
+}
+
+// Query token balance with permit support
+export function formatTokenBalanceQuery(address: string, viewingKey?: string, permit?: any) {
+  if (permit) {
+    return {
+      with_permit: {
+        permit: permit,
+        query: {
+          balance: {
+            address: address
+          }
+        }
+      }
+    };
+  }
+  
   if (viewingKey) {
     return {
       balance: {
@@ -17,7 +46,8 @@ export function formatTokenBalanceQuery(address: string, viewingKey?: string) {
       }
     };
   }
-  // Without viewing key (will return error if token requires it)
+  
+  // Without viewing key or permit (will return error if token requires it)
   return {
     balance: {
       address: address
@@ -225,7 +255,7 @@ export function getQueryForTokenType(
     case 'SNIP-20':
     case 'SNIP-25':
       if (queryType === 'balance') {
-        return formatTokenBalanceQuery(params.address, params.viewingKey);
+        return formatTokenBalanceQuery(params.address, params.viewingKey, params.permit);
       } else if (queryType === 'info') {
         return formatTokenInfoQuery();
       }

@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { SecretNetworkClient } from 'secretjs';
 import { WalletService } from './wallet-service.js';
 import { TOKEN_REGISTRY, findToken, findNFT, listTokenSymbols, listNFTCollections, type TokenInfo, type NFTInfo } from './token-registry.js';
-import { formatTokenBalanceQuery, formatTokenInfoQuery, formatNFTOwnershipQuery, formatNFTContractInfoQuery } from './query-helpers.js';
+import { formatTokenBalanceQuery, formatTokenInfoQuery, formatNFTOwnershipQuery, formatNFTContractInfoQuery, type Permit } from './query-helpers.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8002', 10);
@@ -116,6 +116,20 @@ const TokenBalanceSchema = z.object({
   tokenSymbolOrName: z.string().describe('Token symbol (e.g., saWETH) or name (e.g., wrapped eth)'),
   address: z.string().regex(/^secret1[a-z0-9]+$/, 'Invalid Secret Network address'),
   viewingKey: z.string().optional(),
+  permit: z.object({
+    params: z.object({
+      permit_name: z.string(),
+      allowed_tokens: z.array(z.string()),
+      permissions: z.array(z.string()),
+    }),
+    signature: z.object({
+      pub_key: z.object({
+        type: z.string(),
+        value: z.string(),
+      }),
+      signature: z.string(),
+    }),
+  }).optional(),
 });
 
 const TokenInfoSchema = z.object({
@@ -270,6 +284,33 @@ const tools = [
         viewingKey: {
           type: 'string',
           description: 'Optional viewing key for private balance',
+        },
+        permit: {
+          type: 'object',
+          description: 'Optional SNIP-24 permit for private balance (preferred over viewing key)',
+          properties: {
+            params: {
+              type: 'object',
+              properties: {
+                permit_name: { type: 'string' },
+                allowed_tokens: { type: 'array', items: { type: 'string' } },
+                permissions: { type: 'array', items: { type: 'string' } },
+              },
+            },
+            signature: {
+              type: 'object',
+              properties: {
+                pub_key: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string' },
+                    value: { type: 'string' },
+                  },
+                },
+                signature: { type: 'string' },
+              },
+            },
+          },
         },
       },
       required: ['tokenSymbolOrName', 'address'],
@@ -542,7 +583,7 @@ async function executeTool(name: string, args: any): Promise<any> {
     }
 
     case 'secret_query_token_balance': {
-      const { tokenSymbolOrName, address, viewingKey } = TokenBalanceSchema.parse(args);
+      const { tokenSymbolOrName, address, viewingKey, permit } = TokenBalanceSchema.parse(args);
       
       // Find token in registry
       const token = findToken(tokenSymbolOrName);
@@ -563,7 +604,7 @@ async function executeTool(name: string, args: any): Promise<any> {
         const codeHash = token.codeHash || await getCodeHash(token.address);
         
         // Format query for token balance
-        const query = formatTokenBalanceQuery(address, viewingKey);
+        const query = formatTokenBalanceQuery(address, viewingKey, permit);
         
         // Query the token contract
         const result = await secretClient.query.compute.queryContract({
@@ -585,13 +626,16 @@ async function executeTool(name: string, args: any): Promise<any> {
           ],
         };
       } catch (error) {
-        // Handle viewing key error
-        if (error instanceof Error && error.message.includes('viewing_key')) {
+        // Handle authentication errors (viewing key or permit required)
+        if (error instanceof Error && (error.message.includes('viewing_key') || error.message.includes('permit') || error.message.includes('unauthorized'))) {
+          const authMethod = permit ? 'permit' : (viewingKey ? 'viewing key' : 'authentication');
           return {
             content: [
               {
                 type: 'text',
-                text: `Cannot query ${token.symbol} balance: This token requires a viewing key for privacy.\nPlease provide a viewing key or create one using the token's contract.`,
+                text: `Cannot query ${token.symbol} balance: This token requires authentication for privacy.\n` +
+                      `Authentication method attempted: ${authMethod}\n` +
+                      `Consider using a SNIP-24 permit (preferred) or viewing key.`,
               },
             ],
             isError: true,
