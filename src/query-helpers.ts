@@ -26,9 +26,19 @@ export interface Permit {
 // Query token balance with permit support
 export function formatTokenBalanceQuery(address: string, viewingKey?: string, permit?: any) {
   if (permit) {
+    // For SHD and other contracts that require chain_id, we need to include it in params
+    const cleanPermit = {
+      params: {
+        ...permit.params,
+        // Add chain_id to params if missing
+        chain_id: permit.params?.chain_id || permit.chain_id || "secret-4"
+      },
+      signature: permit.signature
+    };
+    
     return {
       with_permit: {
-        permit: permit,
+        permit: cleanPermit,
         query: {
           balance: {
             address: address

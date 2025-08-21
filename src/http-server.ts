@@ -588,6 +588,16 @@ async function executeTool(name: string, args: any): Promise<any> {
       console.log(`🔍 Token balance query for ${tokenSymbolOrName}`);
       console.log(`📋 Args: address=${address}, viewingKey=${viewingKey ? 'present' : 'none'}, permit=${permit ? 'present' : 'none'}`);
       
+      // Enhanced permit debugging
+      if (permit) {
+        console.log(`🔐 PERMIT DEBUG - Full permit structure:`, JSON.stringify(permit, null, 2));
+        console.log(`🔐 PERMIT DEBUG - Permit name: ${permit.params?.permit_name}`);
+        console.log(`🔐 PERMIT DEBUG - Allowed tokens count: ${permit.params?.allowed_tokens?.length || 0}`);
+        console.log(`🔐 PERMIT DEBUG - Permissions: ${permit.params?.permissions?.join(', ') || 'none'}`);
+        console.log(`🔐 PERMIT DEBUG - Has signature: ${!!permit.signature}`);
+        console.log(`🔐 PERMIT DEBUG - Signature pub_key type: ${permit.signature?.pub_key?.type}`);
+      }
+      
       // Find token in registry
       const token = findToken(tokenSymbolOrName);
       if (!token) {
@@ -602,27 +612,69 @@ async function executeTool(name: string, args: any): Promise<any> {
         };
       }
       
+      console.log(`🏷️ TOKEN DEBUG - Found token: ${token.name} (${token.symbol})`);
+      console.log(`🏷️ TOKEN DEBUG - Contract: ${token.address}`);
+      console.log(`🏷️ TOKEN DEBUG - Type: ${token.type}, Decimals: ${token.decimals}`);
+      console.log(`🏷️ TOKEN DEBUG - Code hash: ${token.codeHash}`);
+      
+      // Validate permit includes this token contract
+      if (permit && permit.params?.allowed_tokens) {
+        const isTokenAllowed = permit.params.allowed_tokens.includes(token.address);
+        console.log(`🔐 PERMIT VALIDATION - Token ${token.address} is ${isTokenAllowed ? 'ALLOWED' : 'NOT ALLOWED'} in permit`);
+        console.log(`🔐 PERMIT VALIDATION - Allowed tokens in permit:`, permit.params.allowed_tokens);
+        
+        if (!isTokenAllowed) {
+          console.log(`❌ PERMIT ERROR - Token ${token.address} not in permit's allowed_tokens list!`);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Permit Error: Token ${token.symbol} (${token.address}) is not included in the permit's allowed tokens list.\nThis permit was not generated for this specific token.`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+      
       try {
         // Get code hash for the token
         const codeHash = token.codeHash || await getCodeHash(token.address);
+        console.log(`🔑 CODE HASH - Using: ${codeHash || 'empty (auto-resolve)'}`);
         
         // Format query for token balance
         const query = formatTokenBalanceQuery(address, viewingKey, permit);
-        console.log(`🔑 Formatted query:`, JSON.stringify(query, null, 2));
+        console.log(`🔑 QUERY DEBUG - Formatted query:`, JSON.stringify(query, null, 2));
         
         // Query the token contract
-        console.log(`📞 Querying contract ${token.address} with codeHash ${codeHash}`);
+        console.log(`📞 CONTRACT CALL - Querying ${token.address} with codeHash ${codeHash}`);
+        console.log(`📞 CONTRACT CALL - Query type: ${permit ? 'with_permit' : viewingKey ? 'with_viewing_key' : 'without_auth'}`);
+        
         const result = await secretClient.query.compute.queryContract({
           contract_address: token.address,
           code_hash: codeHash,
           query,
         });
         
-        console.log(`📊 Raw contract response:`, JSON.stringify(result, null, 2));
+        console.log(`📊 CONTRACT RESPONSE - Raw result:`, JSON.stringify(result, null, 2));
         
-        // Parse balance result
+        // Enhanced balance parsing
         const balance = (result as any).balance?.amount || '0';
+        const rawBalance = balance;
         const formattedBalance = (parseInt(balance) / Math.pow(10, token.decimals)).toFixed(6);
+        
+        console.log(`💰 BALANCE DEBUG - Raw balance: ${rawBalance}`);
+        console.log(`💰 BALANCE DEBUG - Formatted balance: ${formattedBalance} ${token.symbol}`);
+        console.log(`💰 BALANCE DEBUG - Decimals used: ${token.decimals}`);
+        
+        // Check if balance is actually 0 or if there's a parsing issue
+        if (rawBalance === '0' && permit) {
+          console.log(`❌ ZERO BALANCE DETECTED - This could indicate:`);
+          console.log(`   1. Permit authentication failed silently`);
+          console.log(`   2. Account actually has 0 balance`);
+          console.log(`   3. Permit format incorrect for this contract`);
+          console.log(`   4. Contract address/code hash mismatch`);
+        }
         
         return {
           content: [
@@ -633,22 +685,38 @@ async function executeTool(name: string, args: any): Promise<any> {
           ],
         };
       } catch (error) {
+        console.error(`❌ CONTRACT ERROR - Full error:`, error);
+        console.error(`❌ CONTRACT ERROR - Error message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        console.error(`❌ CONTRACT ERROR - Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
+        
         // Handle authentication errors (viewing key or permit required)
         if (error instanceof Error && (error.message.includes('viewing_key') || error.message.includes('permit') || error.message.includes('unauthorized'))) {
           const authMethod = permit ? 'permit' : (viewingKey ? 'viewing key' : 'authentication');
+          console.log(`🔒 AUTH ERROR - Authentication method attempted: ${authMethod}`);
           return {
             content: [
               {
                 type: 'text',
                 text: `Cannot query ${token.symbol} balance: This token requires authentication for privacy.\n` +
                       `Authentication method attempted: ${authMethod}\n` +
+                      `Error: ${error.message}\n` +
                       `Consider using a SNIP-24 permit (preferred) or viewing key.`,
               },
             ],
             isError: true,
           };
         }
-        throw error;
+        
+        // Enhanced error reporting
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error querying ${token.symbol} balance:\nError: ${error instanceof Error ? error.message : 'Unknown error'}\nContract: ${token.address}\nAddress: ${address}`,
+            },
+          ],
+          isError: true,
+        };
       }
     }
 
