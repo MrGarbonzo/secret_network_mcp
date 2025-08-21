@@ -596,6 +596,29 @@ async function executeTool(name: string, args: any): Promise<any> {
         console.log(`🔐 PERMIT DEBUG - Permissions: ${permit.params?.permissions?.join(', ') || 'none'}`);
         console.log(`🔐 PERMIT DEBUG - Has signature: ${!!permit.signature}`);
         console.log(`🔐 PERMIT DEBUG - Signature pub_key type: ${permit.signature?.pub_key?.type}`);
+        console.log(`🔐 PERMIT DEBUG - Signature pub_key value: ${permit.signature?.pub_key?.value}`);
+        console.log(`🔐 PERMIT DEBUG - Chain ID in params: ${(permit.params as any)?.chain_id || 'MISSING'}`);
+        
+        // Address verification
+        console.log(`🔑 ADDRESS VERIFICATION - Query address: ${address}`);
+        console.log(`🔑 ADDRESS VERIFICATION - Public key in permit: ${permit.signature?.pub_key?.value}`);
+        
+        // Address mismatch detection (basic check)
+        // In a real implementation, we'd derive the address from the public key
+        // For now, we'll log a warning if the permit seems to be for a different address
+        if (permit.params?.permit_name?.includes('master') || permit.params?.permit_name?.includes('secretGPT')) {
+          console.log(`🔑 ADDRESS VERIFICATION - This is a master permit, should work for any address the signer owns`);
+        }
+        
+        // Check if this might be an address mismatch issue
+        const permitName = permit.params?.permit_name || 'unknown';
+        if (permitName.includes(address.substring(0, 10))) {
+          console.log(`✅ ADDRESS VERIFICATION - Permit name suggests it's for this address`);
+        } else {
+          console.log(`⚠️  ADDRESS VERIFICATION - Permit may be for a different address`);
+          console.log(`   Permit name: ${permitName}`);
+          console.log(`   Query address: ${address}`);
+        }
       }
       
       // Find token in registry
@@ -637,6 +660,39 @@ async function executeTool(name: string, args: any): Promise<any> {
         }
       }
       
+      // Validate permit structure before querying
+      if (permit) {
+        const permitValidation = {
+          hasParams: !!permit.params,
+          hasSignature: !!permit.signature,
+          hasPermitName: !!permit.params?.permit_name,
+          hasAllowedTokens: !!permit.params?.allowed_tokens,
+          hasPermissions: !!permit.params?.permissions,
+          hasChainId: !!(permit.params as any)?.chain_id,
+          hasPubKey: !!permit.signature?.pub_key,
+          hasSignatureValue: !!permit.signature?.signature
+        };
+        
+        console.log(`✅ PERMIT VALIDATION:`, permitValidation);
+        
+        if (!permitValidation.hasChainId) {
+          console.log(`⚠️ WARNING: chain_id missing from permit params - adding default`);
+        }
+        
+        if (!permitValidation.hasParams || !permitValidation.hasSignature) {
+          console.log(`❌ CRITICAL: Permit missing required fields (params or signature)`);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Invalid permit structure. Missing ${!permitValidation.hasParams ? 'params' : 'signature'}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+      }
+      
       try {
         // Get code hash for the token
         const codeHash = token.codeHash || await getCodeHash(token.address);
@@ -670,10 +726,20 @@ async function executeTool(name: string, args: any): Promise<any> {
         // Check if balance is actually 0 or if there's a parsing issue
         if (rawBalance === '0' && permit) {
           console.log(`❌ ZERO BALANCE DETECTED - This could indicate:`);
-          console.log(`   1. Permit authentication failed silently`);
+          console.log(`   1. Permit signature doesn't match the query address`);
+          console.log(`      - The permit was signed by a different wallet`);
+          console.log(`      - Query address: ${address}`);
+          console.log(`      - Permit public key: ${permit.signature?.pub_key?.value}`);
           console.log(`   2. Account actually has 0 balance`);
-          console.log(`   3. Permit format incorrect for this contract`);
-          console.log(`   4. Contract address/code hash mismatch`);
+          console.log(`   3. Permit format is correct but signature verification failed`);
+          console.log(`   4. The token contract rejected the permit`);
+          
+          // Check for common signature errors
+          if ((result as any) === 'Generic error: Failed to verify signatures for the given permit') {
+            console.log(`\n🔴 SIGNATURE VERIFICATION FAILED`);
+            console.log(`   This means the permit's signature doesn't match the expected signer.`);
+            console.log(`   Solution: Generate a new permit with the wallet that owns address: ${address}`);
+          }
         }
         
         return {

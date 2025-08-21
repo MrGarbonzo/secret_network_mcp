@@ -26,15 +26,42 @@ export interface Permit {
 // Query token balance with permit support
 export function formatTokenBalanceQuery(address: string, viewingKey?: string, permit?: any) {
   if (permit) {
-    // For SHD and other contracts that require chain_id, we need to include it in params
+    // Clean and validate permit structure for SNIP-24
+    // Remove any extra fields that shouldn't be in the final permit
+    
+    // Handle signature type compatibility
+    let signature = permit.signature;
+    if (signature?.pub_key?.type) {
+      // Normalize pub_key type for compatibility
+      // Some contracts expect 'tendermint/PubKeySecp256k1', others '/cosmos.crypto.secp256k1.PubKey'
+      // Keep the original format as sent by Keplr
+      signature = {
+        ...signature,
+        pub_key: {
+          ...signature.pub_key,
+          // Keep original type from Keplr - it should work with proper permit structure
+          type: signature.pub_key.type
+        }
+      };
+    }
+    
     const cleanPermit = {
       params: {
-        ...permit.params,
-        // Add chain_id to params if missing
+        permit_name: permit.params?.permit_name,
+        allowed_tokens: permit.params?.allowed_tokens,
+        permissions: permit.params?.permissions,
+        // Ensure chain_id is always in params (required for SNIP-24)
         chain_id: permit.params?.chain_id || permit.chain_id || "secret-4"
       },
-      signature: permit.signature
+      signature: signature
     };
+    
+    // Remove any undefined fields from params
+    Object.keys(cleanPermit.params).forEach(key => {
+      if (cleanPermit.params[key] === undefined) {
+        delete cleanPermit.params[key];
+      }
+    });
     
     return {
       with_permit: {
