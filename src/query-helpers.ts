@@ -67,9 +67,7 @@ export function formatTokenBalanceQuery(address: string, viewingKey?: string, pe
       with_permit: {
         permit: cleanPermit,
         query: {
-          balance: {
-            address: address
-          }
+          balance: {}
         }
       }
     };

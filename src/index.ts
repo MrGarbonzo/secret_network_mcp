@@ -11,7 +11,7 @@ import {
 import { z } from 'zod';
 import { SecretNetworkClient } from 'secretjs';
 import { TOKEN_REGISTRY, findToken, findNFT, listTokenSymbols, listNFTCollections, type TokenInfo, type NFTInfo } from './token-registry';
-import { formatTokenBalanceQuery, formatTokenInfoQuery, formatNFTOwnershipQuery, formatNFTContractInfoQuery } from './query-helpers';
+import { formatTokenBalanceQuery, formatTokenInfoQuery, formatNFTOwnershipQuery, formatNFTContractInfoQuery } from './query-adapters';
 
 // Server configuration
 const server = new Server(
