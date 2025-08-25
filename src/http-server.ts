@@ -7,7 +7,15 @@ import { z } from 'zod';
 import { SecretNetworkClient } from 'secretjs';
 import { WalletService } from './wallet-service.js';
 import { TOKEN_REGISTRY, findToken, findNFT, listTokenSymbols, listNFTCollections, type TokenInfo, type NFTInfo } from './token-registry.js';
-import { formatTokenBalanceQuery, formatTokenInfoQuery, formatNFTOwnershipQuery, formatNFTContractInfoQuery, type Permit } from './query-helpers.js';
+import { formatTokenInfoQuery, formatNFTContractInfoQuery } from './query-helpers.js';
+import { 
+  createNFTOwnershipQuery, 
+  createNFTMetadataQuery, 
+  createNFTBalanceQuery, 
+  createNFTTokensQuery,
+  validatePermit,
+  type Permit 
+} from './permits/index.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8002', 10);
@@ -112,35 +120,51 @@ const ToolCallSchema = z.object({
   arguments: z.record(z.any()),
 });
 
-const TokenBalanceSchema = z.object({
-  tokenSymbolOrName: z.string().describe('Token symbol (e.g., saWETH) or name (e.g., wrapped eth)'),
-  address: z.string().regex(/^secret1[a-z0-9]+$/, 'Invalid Secret Network address'),
-  viewingKey: z.string().optional(),
-  permit: z.object({
-    params: z.object({
-      permit_name: z.string(),
-      allowed_tokens: z.array(z.string()),
-      permissions: z.array(z.string()),
+const PermitSchema = z.object({
+  params: z.object({
+    permit_name: z.string(),
+    allowed_tokens: z.array(z.string()),
+    permissions: z.array(z.string()),
+    chain_id: z.string()
+  }),
+  signature: z.object({
+    pub_key: z.object({
+      type: z.string(),
+      value: z.string()
     }),
-    signature: z.object({
-      pub_key: z.object({
-        type: z.string(),
-        value: z.string(),
-      }),
-      signature: z.string(),
-    }),
-  }).optional(),
+    signature: z.string()
+  })
+});
+
+const NFTOwnershipSchema = z.object({
+  contractAddress: z.string().describe('NFT contract address'),
+  tokenId: z.string().describe('Token ID to check ownership'),
+  permit: PermitSchema.describe('SNIP-24 permit for authentication'),
+  includeExpired: z.boolean().optional().describe('Include expired approvals')
+});
+
+const NFTMetadataSchema = z.object({
+  contractAddress: z.string().describe('NFT contract address'),
+  tokenId: z.string().describe('Token ID to get metadata'),
+  permit: PermitSchema.describe('SNIP-24 permit for authentication')
+});
+
+const NFTBalanceSchema = z.object({
+  contractAddress: z.string().describe('NFT contract address'),
+  owner: z.string().describe('Owner address'),
+  permit: PermitSchema.describe('SNIP-24 permit for authentication')
+});
+
+const NFTTokensSchema = z.object({
+  contractAddress: z.string().describe('NFT contract address'),
+  owner: z.string().describe('Owner address'),
+  permit: PermitSchema.describe('SNIP-24 permit for authentication'),
+  startAfter: z.string().optional().describe('Start after token ID'),
+  limit: z.number().optional().describe('Limit number of results')
 });
 
 const TokenInfoSchema = z.object({
   tokenSymbolOrName: z.string().describe('Token symbol or name'),
-});
-
-const NFTOwnershipSchema = z.object({
-  collectionName: z.string().describe('NFT collection name (e.g., jack robbins)'),
-  ownerAddress: z.string().regex(/^secret1[a-z0-9]+$/, 'Invalid Secret Network address'),
-  viewingKey: z.string().optional(),
-  limit: z.number().int().positive().max(100).default(30).optional(),
 });
 
 const NFTInfoSchema = z.object({
@@ -266,56 +290,8 @@ const tools = [
       required: ['from_address', 'to_address', 'amount'],
     },
   },
-  {
-    name: 'secret_query_token_balance',
-    description: 'Query SNIP-20/25 token balance (e.g., saWETH, saUSDC, sSCRT)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        tokenSymbolOrName: {
-          type: 'string',
-          description: 'Token symbol (e.g., saWETH) or name (e.g., wrapped eth)',
-        },
-        address: {
-          type: 'string',
-          description: 'Wallet address to check balance for',
-          pattern: '^secret1[a-z0-9]+$',
-        },
-        viewingKey: {
-          type: 'string',
-          description: 'Optional viewing key for private balance',
-        },
-        permit: {
-          type: 'object',
-          description: 'Optional SNIP-24 permit for private balance (preferred over viewing key)',
-          properties: {
-            params: {
-              type: 'object',
-              properties: {
-                permit_name: { type: 'string' },
-                allowed_tokens: { type: 'array', items: { type: 'string' } },
-                permissions: { type: 'array', items: { type: 'string' } },
-              },
-            },
-            signature: {
-              type: 'object',
-              properties: {
-                pub_key: {
-                  type: 'object',
-                  properties: {
-                    type: { type: 'string' },
-                    value: { type: 'string' },
-                  },
-                },
-                signature: { type: 'string' },
-              },
-            },
-          },
-        },
-      },
-      required: ['tokenSymbolOrName', 'address'],
-    },
-  },
+  // NOTE: secret_query_token_balance removed - broken permit implementation
+  // Will be replaced with correct permit-based token query tool
   {
     name: 'secret_query_token_info',
     description: 'Get token information (name, symbol, decimals, supply)',
@@ -332,29 +308,222 @@ const tools = [
   },
   {
     name: 'secret_query_nft_ownership',
-    description: 'Check NFT ownership for a wallet address',
+    description: 'Check NFT ownership using SNIP-24 permit authentication',
     inputSchema: {
       type: 'object',
       properties: {
-        collectionName: {
+        contractAddress: {
           type: 'string',
-          description: 'NFT collection name (e.g., jack robbins)',
-        },
-        ownerAddress: {
-          type: 'string',
-          description: 'Wallet address to check NFT ownership',
+          description: 'NFT contract address',
           pattern: '^secret1[a-z0-9]+$',
         },
-        viewingKey: {
+        tokenId: {
           type: 'string',
-          description: 'Optional viewing key for private NFTs',
+          description: 'Token ID to check ownership',
+        },
+        permit: {
+          type: 'object',
+          description: 'SNIP-24 permit for authentication',
+          properties: {
+            params: {
+              type: 'object',
+              properties: {
+                permit_name: { type: 'string' },
+                allowed_tokens: { type: 'array', items: { type: 'string' } },
+                permissions: { type: 'array', items: { type: 'string' } },
+                chain_id: { type: 'string' }
+              },
+              required: ['permit_name', 'allowed_tokens', 'permissions', 'chain_id']
+            },
+            signature: {
+              type: 'object',
+              properties: {
+                pub_key: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string' },
+                    value: { type: 'string' }
+                  },
+                  required: ['type', 'value']
+                },
+                signature: { type: 'string' }
+              },
+              required: ['pub_key', 'signature']
+            }
+          },
+          required: ['params', 'signature']
+        },
+        includeExpired: {
+          type: 'boolean',
+          description: 'Include expired approvals (optional)',
+        },
+      },
+      required: ['contractAddress', 'tokenId', 'permit'],
+    },
+  },
+  {
+    name: 'secret_query_nft_metadata',
+    description: 'Get NFT metadata using SNIP-24 permit authentication',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contractAddress: {
+          type: 'string',
+          description: 'NFT contract address',
+          pattern: '^secret1[a-z0-9]+$',
+        },
+        tokenId: {
+          type: 'string',
+          description: 'Token ID to get metadata',
+        },
+        permit: {
+          type: 'object',
+          description: 'SNIP-24 permit for authentication',
+          properties: {
+            params: {
+              type: 'object',
+              properties: {
+                permit_name: { type: 'string' },
+                allowed_tokens: { type: 'array', items: { type: 'string' } },
+                permissions: { type: 'array', items: { type: 'string' } },
+                chain_id: { type: 'string' }
+              },
+              required: ['permit_name', 'allowed_tokens', 'permissions', 'chain_id']
+            },
+            signature: {
+              type: 'object',
+              properties: {
+                pub_key: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string' },
+                    value: { type: 'string' }
+                  },
+                  required: ['type', 'value']
+                },
+                signature: { type: 'string' }
+              },
+              required: ['pub_key', 'signature']
+            }
+          },
+          required: ['params', 'signature']
+        },
+      },
+      required: ['contractAddress', 'tokenId', 'permit'],
+    },
+  },
+  {
+    name: 'secret_query_nft_balance',
+    description: 'Get NFT balance for an owner using SNIP-24 permit authentication',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contractAddress: {
+          type: 'string',
+          description: 'NFT contract address',
+          pattern: '^secret1[a-z0-9]+$',
+        },
+        owner: {
+          type: 'string',
+          description: 'Owner address',
+          pattern: '^secret1[a-z0-9]+$',
+        },
+        permit: {
+          type: 'object',
+          description: 'SNIP-24 permit for authentication',
+          properties: {
+            params: {
+              type: 'object',
+              properties: {
+                permit_name: { type: 'string' },
+                allowed_tokens: { type: 'array', items: { type: 'string' } },
+                permissions: { type: 'array', items: { type: 'string' } },
+                chain_id: { type: 'string' }
+              },
+              required: ['permit_name', 'allowed_tokens', 'permissions', 'chain_id']
+            },
+            signature: {
+              type: 'object',
+              properties: {
+                pub_key: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string' },
+                    value: { type: 'string' }
+                  },
+                  required: ['type', 'value']
+                },
+                signature: { type: 'string' }
+              },
+              required: ['pub_key', 'signature']
+            }
+          },
+          required: ['params', 'signature']
+        },
+      },
+      required: ['contractAddress', 'owner', 'permit'],
+    },
+  },
+  {
+    name: 'secret_query_nft_tokens',
+    description: 'Get NFT tokens owned by an address using SNIP-24 permit authentication',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contractAddress: {
+          type: 'string',
+          description: 'NFT contract address',
+          pattern: '^secret1[a-z0-9]+$',
+        },
+        owner: {
+          type: 'string',
+          description: 'Owner address',
+          pattern: '^secret1[a-z0-9]+$',
+        },
+        permit: {
+          type: 'object',
+          description: 'SNIP-24 permit for authentication',
+          properties: {
+            params: {
+              type: 'object',
+              properties: {
+                permit_name: { type: 'string' },
+                allowed_tokens: { type: 'array', items: { type: 'string' } },
+                permissions: { type: 'array', items: { type: 'string' } },
+                chain_id: { type: 'string' }
+              },
+              required: ['permit_name', 'allowed_tokens', 'permissions', 'chain_id']
+            },
+            signature: {
+              type: 'object',
+              properties: {
+                pub_key: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string' },
+                    value: { type: 'string' }
+                  },
+                  required: ['type', 'value']
+                },
+                signature: { type: 'string' }
+              },
+              required: ['pub_key', 'signature']
+            }
+          },
+          required: ['params', 'signature']
+        },
+        startAfter: {
+          type: 'string',
+          description: 'Start after token ID (optional)',
         },
         limit: {
           type: 'number',
-          description: 'Maximum number of NFTs to return (default: 30, max: 100)',
+          description: 'Limit number of results (optional, default 30)',
+          minimum: 1,
+          maximum: 100,
         },
       },
-      required: ['collectionName', 'ownerAddress'],
+      required: ['contractAddress', 'owner', 'permit'],
     },
   },
   {
@@ -582,209 +751,8 @@ async function executeTool(name: string, args: any): Promise<any> {
       };
     }
 
-    case 'secret_query_token_balance': {
-      const { tokenSymbolOrName, address, viewingKey, permit } = TokenBalanceSchema.parse(args);
-      
-      console.log(`🔍 Token balance query for ${tokenSymbolOrName}`);
-      console.log(`📋 Args: address=${address}, viewingKey=${viewingKey ? 'present' : 'none'}, permit=${permit ? 'present' : 'none'}`);
-      
-      // Enhanced permit debugging
-      if (permit) {
-        console.log(`🔐 PERMIT DEBUG - Full permit structure:`, JSON.stringify(permit, null, 2));
-        console.log(`🔐 PERMIT DEBUG - Permit name: ${permit.params?.permit_name}`);
-        console.log(`🔐 PERMIT DEBUG - Allowed tokens count: ${permit.params?.allowed_tokens?.length || 0}`);
-        console.log(`🔐 PERMIT DEBUG - Permissions: ${permit.params?.permissions?.join(', ') || 'none'}`);
-        console.log(`🔐 PERMIT DEBUG - Has signature: ${!!permit.signature}`);
-        console.log(`🔐 PERMIT DEBUG - Signature pub_key type: ${permit.signature?.pub_key?.type}`);
-        console.log(`🔐 PERMIT DEBUG - Signature pub_key value: ${permit.signature?.pub_key?.value}`);
-        console.log(`🔐 PERMIT DEBUG - Chain ID in params: ${(permit.params as any)?.chain_id || 'MISSING'}`);
-        
-        // Address verification
-        console.log(`🔑 ADDRESS VERIFICATION - Query address: ${address}`);
-        console.log(`🔑 ADDRESS VERIFICATION - Public key in permit: ${permit.signature?.pub_key?.value}`);
-        
-        // Address mismatch detection (basic check)
-        // In a real implementation, we'd derive the address from the public key
-        // For now, we'll log a warning if the permit seems to be for a different address
-        if (permit.params?.permit_name?.includes('master') || permit.params?.permit_name?.includes('secretGPT')) {
-          console.log(`🔑 ADDRESS VERIFICATION - This is a master permit, should work for any address the signer owns`);
-        }
-        
-        // Check if this might be an address mismatch issue
-        const permitName = permit.params?.permit_name || 'unknown';
-        if (permitName.includes(address.substring(0, 10))) {
-          console.log(`✅ ADDRESS VERIFICATION - Permit name suggests it's for this address`);
-        } else {
-          console.log(`⚠️  ADDRESS VERIFICATION - Permit may be for a different address`);
-          console.log(`   Permit name: ${permitName}`);
-          console.log(`   Query address: ${address}`);
-        }
-      }
-      
-      // Find token in registry
-      const token = findToken(tokenSymbolOrName);
-      if (!token) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Token not found: ${tokenSymbolOrName}\nAvailable tokens: ${listTokenSymbols().join(', ')}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-      
-      console.log(`🏷️ TOKEN DEBUG - Found token: ${token.name} (${token.symbol})`);
-      console.log(`🏷️ TOKEN DEBUG - Contract: ${token.address}`);
-      console.log(`🏷️ TOKEN DEBUG - Type: ${token.type}, Decimals: ${token.decimals}`);
-      console.log(`🏷️ TOKEN DEBUG - Code hash: ${token.codeHash}`);
-      
-      // Validate permit includes this token contract
-      if (permit && permit.params?.allowed_tokens) {
-        const isTokenAllowed = permit.params.allowed_tokens.includes(token.address);
-        console.log(`🔐 PERMIT VALIDATION - Token ${token.address} is ${isTokenAllowed ? 'ALLOWED' : 'NOT ALLOWED'} in permit`);
-        console.log(`🔐 PERMIT VALIDATION - Allowed tokens in permit:`, permit.params.allowed_tokens);
-        
-        if (!isTokenAllowed) {
-          console.log(`❌ PERMIT ERROR - Token ${token.address} not in permit's allowed_tokens list!`);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Permit Error: Token ${token.symbol} (${token.address}) is not included in the permit's allowed tokens list.\nThis permit was not generated for this specific token.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-      
-      // Validate permit structure before querying
-      if (permit) {
-        const permitValidation = {
-          hasParams: !!permit.params,
-          hasSignature: !!permit.signature,
-          hasPermitName: !!permit.params?.permit_name,
-          hasAllowedTokens: !!permit.params?.allowed_tokens,
-          hasPermissions: !!permit.params?.permissions,
-          hasChainId: !!(permit.params as any)?.chain_id,
-          hasPubKey: !!permit.signature?.pub_key,
-          hasSignatureValue: !!permit.signature?.signature
-        };
-        
-        console.log(`✅ PERMIT VALIDATION:`, permitValidation);
-        
-        if (!permitValidation.hasChainId) {
-          console.log(`⚠️ WARNING: chain_id missing from permit params - adding default`);
-        }
-        
-        if (!permitValidation.hasParams || !permitValidation.hasSignature) {
-          console.log(`❌ CRITICAL: Permit missing required fields (params or signature)`);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Invalid permit structure. Missing ${!permitValidation.hasParams ? 'params' : 'signature'}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-      }
-      
-      try {
-        // Get code hash for the token
-        const codeHash = token.codeHash || await getCodeHash(token.address);
-        console.log(`🔑 CODE HASH - Using: ${codeHash || 'empty (auto-resolve)'}`);
-        
-        // Format query for token balance
-        const query = formatTokenBalanceQuery(address, viewingKey, permit);
-        console.log(`🔑 QUERY DEBUG - Formatted query:`, JSON.stringify(query, null, 2));
-        
-        // Query the token contract
-        console.log(`📞 CONTRACT CALL - Querying ${token.address} with codeHash ${codeHash}`);
-        console.log(`📞 CONTRACT CALL - Query type: ${permit ? 'with_permit' : viewingKey ? 'with_viewing_key' : 'without_auth'}`);
-        
-        const result = await secretClient.query.compute.queryContract({
-          contract_address: token.address,
-          code_hash: codeHash,
-          query,
-        });
-        
-        console.log(`📊 CONTRACT RESPONSE - Raw result:`, JSON.stringify(result, null, 2));
-        
-        // Enhanced balance parsing
-        const balance = (result as any).balance?.amount || '0';
-        const rawBalance = balance;
-        const formattedBalance = (parseInt(balance) / Math.pow(10, token.decimals)).toFixed(6);
-        
-        console.log(`💰 BALANCE DEBUG - Raw balance: ${rawBalance}`);
-        console.log(`💰 BALANCE DEBUG - Formatted balance: ${formattedBalance} ${token.symbol}`);
-        console.log(`💰 BALANCE DEBUG - Decimals used: ${token.decimals}`);
-        
-        // Check if balance is actually 0 or if there's a parsing issue
-        if (rawBalance === '0' && permit) {
-          console.log(`❌ ZERO BALANCE DETECTED - This could indicate:`);
-          console.log(`   1. Permit signature doesn't match the query address`);
-          console.log(`      - The permit was signed by a different wallet`);
-          console.log(`      - Query address: ${address}`);
-          console.log(`      - Permit public key: ${permit.signature?.pub_key?.value}`);
-          console.log(`   2. Account actually has 0 balance`);
-          console.log(`   3. Permit format is correct but signature verification failed`);
-          console.log(`   4. The token contract rejected the permit`);
-          
-          // Check for common signature errors
-          if ((result as any) === 'Generic error: Failed to verify signatures for the given permit') {
-            console.log(`\n🔴 SIGNATURE VERIFICATION FAILED`);
-            console.log(`   This means the permit's signature doesn't match the expected signer.`);
-            console.log(`   Solution: Generate a new permit with the wallet that owns address: ${address}`);
-          }
-        }
-        
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `${token.name} (${token.symbol}) Balance:\nAddress: ${address}\nBalance: ${formattedBalance} ${token.symbol}\nToken Contract: ${token.address}`,
-            },
-          ],
-        };
-      } catch (error) {
-        console.error(`❌ CONTRACT ERROR - Full error:`, error);
-        console.error(`❌ CONTRACT ERROR - Error message: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        console.error(`❌ CONTRACT ERROR - Error stack:`, error instanceof Error ? error.stack : 'No stack trace');
-        
-        // Handle authentication errors (viewing key or permit required)
-        if (error instanceof Error && (error.message.includes('viewing_key') || error.message.includes('permit') || error.message.includes('unauthorized'))) {
-          const authMethod = permit ? 'permit' : (viewingKey ? 'viewing key' : 'authentication');
-          console.log(`🔒 AUTH ERROR - Authentication method attempted: ${authMethod}`);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Cannot query ${token.symbol} balance: This token requires authentication for privacy.\n` +
-                      `Authentication method attempted: ${authMethod}\n` +
-                      `Error: ${error.message}\n` +
-                      `Consider using a SNIP-24 permit (preferred) or viewing key.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        
-        // Enhanced error reporting
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error querying ${token.symbol} balance:\nError: ${error instanceof Error ? error.message : 'Unknown error'}\nContract: ${token.address}\nAddress: ${address}`,
-            },
-          ],
-          isError: true,
-        };
-      }
-    }
+    // NOTE: secret_query_token_balance case removed - broken permit implementation
+    // Will be replaced with correct permit-based token balance query
 
     case 'secret_query_token_info': {
       const { tokenSymbolOrName } = TokenInfoSchema.parse(args);
@@ -827,58 +795,166 @@ async function executeTool(name: string, args: any): Promise<any> {
     }
 
     case 'secret_query_nft_ownership': {
-      const { collectionName, ownerAddress, viewingKey, limit } = NFTOwnershipSchema.parse(args);
+      const { contractAddress, tokenId, permit, includeExpired } = NFTOwnershipSchema.parse(args);
       
-      // Find NFT collection in registry
-      const nft = findNFT(collectionName);
-      if (!nft) {
+      try {
+        // Validate permit structure
+        validatePermit(permit as Permit);
+        
+        // Get code hash for the contract
+        const codeHash = await getCodeHash(contractAddress);
+        
+        // Create the permit-based query  
+        const query = createNFTOwnershipQuery(tokenId, permit as Permit, includeExpired);
+        
+        // Execute the query
+        const result = await secretClient.query.compute.queryContract({
+          contract_address: contractAddress,
+          code_hash: codeHash,
+          query,
+        });
+        
         return {
           content: [
             {
               type: 'text',
-              text: `NFT collection not found: ${collectionName}\nAvailable collections: ${listNFTCollections().join(', ')}`,
+              text: `NFT Ownership Query Result:\n${JSON.stringify(result, null, 2)}`,
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error querying NFT ownership: ${error.message}`,
             },
           ],
           isError: true,
         };
       }
-      
-      // Get code hash for the NFT contract
-      const codeHash = nft.codeHash || await getCodeHash(nft.address);
-      
-      // Format query for NFT ownership
-      const query = formatNFTOwnershipQuery(ownerAddress, viewingKey, limit || 30);
+    }
+
+    case 'secret_query_nft_metadata': {
+      const { contractAddress, tokenId, permit } = NFTMetadataSchema.parse(args);
       
       try {
+        // Validate permit structure
+        validatePermit(permit as Permit);
+        
+        // Get code hash for the contract
+        const codeHash = await getCodeHash(contractAddress);
+        
+        // Create the permit-based query
+        const query = createNFTMetadataQuery(tokenId, permit as Permit);
+        
+        // Execute the query
         const result = await secretClient.query.compute.queryContract({
-          contract_address: nft.address,
+          contract_address: contractAddress,
           code_hash: codeHash,
           query,
         });
-        
-        const tokens = (result as any).tokens?.tokens || [];
         
         return {
           content: [
             {
               type: 'text',
-              text: `NFT Ownership for ${nft.name}:\nOwner: ${ownerAddress}\nNFTs Owned: ${tokens.length}\n${tokens.length > 0 ? `Token IDs: ${tokens.slice(0, 10).join(', ')}${tokens.length > 10 ? ` (and ${tokens.length - 10} more)` : ''}` : 'No NFTs found'}`,
+              text: `NFT Metadata Query Result:\n${JSON.stringify(result, null, 2)}`,
             },
           ],
         };
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('viewing_key')) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Cannot query NFT ownership: This collection may require a viewing key for private NFTs.\nOwner: ${ownerAddress}\nCollection: ${nft.name}`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        throw error;
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error querying NFT metadata: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case 'secret_query_nft_balance': {
+      const { contractAddress, owner, permit } = NFTBalanceSchema.parse(args);
+      
+      try {
+        // Validate permit structure
+        validatePermit(permit as Permit);
+        
+        // Get code hash for the contract
+        const codeHash = await getCodeHash(contractAddress);
+        
+        // Create the permit-based query
+        const query = createNFTBalanceQuery(owner, permit as Permit);
+        
+        // Execute the query
+        const result = await secretClient.query.compute.queryContract({
+          contract_address: contractAddress,
+          code_hash: codeHash,
+          query,
+        });
+        
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `NFT Balance Query Result:\n${JSON.stringify(result, null, 2)}`,
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error querying NFT balance: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    case 'secret_query_nft_tokens': {
+      const { contractAddress, owner, permit, startAfter, limit } = NFTTokensSchema.parse(args);
+      
+      try {
+        // Validate permit structure
+        validatePermit(permit as Permit);
+        
+        // Get code hash for the contract
+        const codeHash = await getCodeHash(contractAddress);
+        
+        // Create the permit-based query
+        const query = createNFTTokensQuery(owner, permit as Permit, startAfter, limit);
+        
+        // Execute the query
+        const result = await secretClient.query.compute.queryContract({
+          contract_address: contractAddress,
+          code_hash: codeHash,
+          query,
+        });
+        
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `NFT Tokens Query Result:\n${JSON.stringify(result, null, 2)}`,
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error querying NFT tokens: ${error.message}`,
+            },
+          ],
+          isError: true,
+        };
       }
     }
 

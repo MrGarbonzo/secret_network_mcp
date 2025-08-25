@@ -11,7 +11,7 @@ import {
 import { z } from 'zod';
 import { SecretNetworkClient } from 'secretjs';
 import { TOKEN_REGISTRY, findToken, findNFT, listTokenSymbols, listNFTCollections, type TokenInfo, type NFTInfo } from './token-registry';
-import { formatTokenBalanceQuery, formatTokenInfoQuery, formatNFTOwnershipQuery, formatNFTContractInfoQuery } from './query-adapters';
+import { formatTokenInfoQuery, formatNFTContractInfoQuery } from './query-helpers';
 
 // Server configuration
 const server = new Server(
@@ -506,40 +506,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Get code hash for the token
           const codeHash = token.codeHash || await getCodeHash(token.address);
           
-          // Format query for token balance
-          const query = formatTokenBalanceQuery(address, viewingKey);
-          
-          // Query the token contract
-          const result = await secretClient.query.compute.queryContract({
-            contract_address: token.address,
-            code_hash: codeHash,
-            query,
-          });
-          
-          // Parse balance result
-          const balance = (result as any).balance?.amount || '0';
-          const formattedBalance = (parseInt(balance) / Math.pow(10, token.decimals)).toFixed(6);
-          
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `${token.name} (${token.symbol}) Balance:\nAddress: ${address}\nBalance: ${formattedBalance} ${token.symbol}\nToken Contract: ${token.address}`,
-              },
-            ],
-          };
+          // NOTE: Viewing key-based queries are deprecated and broken
+          // Use the HTTP server with permit-based queries instead
+          throw new Error('Token balance queries with viewing keys are no longer supported. Use permit-based queries via HTTP server.');
         } catch (error) {
-          // Handle viewing key error
-          if (error instanceof Error && error.message.includes('viewing_key')) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Cannot query ${token.symbol} balance: This token requires a viewing key for privacy.\nPlease provide a viewing key or create one using the token's contract.`,
-                },
-              ],
-            };
-          }
           throw error;
         }
       }
@@ -602,39 +572,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // Get code hash for the NFT contract
         const codeHash = nft.codeHash || await getCodeHash(nft.address);
         
-        // Format query for NFT ownership
-        const query = formatNFTOwnershipQuery(ownerAddress, viewingKey, limit || 30);
-        
-        try {
-          const result = await secretClient.query.compute.queryContract({
-            contract_address: nft.address,
-            code_hash: codeHash,
-            query,
-          });
-          
-          const tokens = (result as any).tokens?.tokens || [];
-          
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `NFT Ownership for ${nft.name}:\nOwner: ${ownerAddress}\nNFTs Owned: ${tokens.length}\n${tokens.length > 0 ? `Token IDs: ${tokens.slice(0, 10).join(', ')}${tokens.length > 10 ? ` (and ${tokens.length - 10} more)` : ''}` : 'No NFTs found'}`,
-              },
-            ],
-          };
-        } catch (error) {
-          if (error instanceof Error && error.message.includes('viewing_key')) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `Cannot query NFT ownership: This collection may require a viewing key for private NFTs.\nOwner: ${ownerAddress}\nCollection: ${nft.name}`,
-                },
-              ],
-            };
-          }
-          throw error;
-        }
+        // NOTE: Viewing key-based queries are deprecated and broken
+        // Use the HTTP server with permit-based queries instead
+        throw new Error('NFT ownership queries with viewing keys are no longer supported. Use permit-based queries via HTTP server.');
       }
 
       case 'secret_query_nft_info': {
