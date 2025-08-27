@@ -126,24 +126,11 @@ const ContractQuerySchema = z.object({
   query: z.record(z.any()),
 });
 
-const TokenBalanceSchema = z.object({
-  tokenSymbolOrName: z.string().describe('Token symbol (e.g., saWETH) or name (e.g., wrapped eth)'),
-  address: z.string().regex(/^secret1[a-z0-9]+$/, 'Invalid Secret Network address'),
-  viewingKey: z.string().optional(),
-});
-
 const TokenInfoSchema = z.object({
   tokenSymbolOrName: z.string().describe('Token symbol or name'),
 });
 
-const NFTOwnershipSchema = z.object({
-  collectionName: z.string().describe('NFT collection name (e.g., jack robbins)'),
-  ownerAddress: z.string().regex(/^secret1[a-z0-9]+$/, 'Invalid Secret Network address'),
-  viewingKey: z.string().optional(),
-  limit: z.number().int().positive().max(100).default(30).optional(),
-});
-
-const NFTInfoSchema = z.object({
+const NFTCollectionInfoSchema = z.object({
   collectionName: z.string().describe('NFT collection name'),
 });
 
@@ -241,29 +228,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: 'secret_query_token_balance',
-        description: 'Query SNIP-20/25 token balance (e.g., saWETH, saUSDC, sSCRT)',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            tokenSymbolOrName: {
-              type: 'string',
-              description: 'Token symbol (e.g., saWETH) or name (e.g., wrapped eth)',
-            },
-            address: {
-              type: 'string',
-              description: 'Wallet address to check balance for',
-              pattern: '^secret1[a-z0-9]+$',
-            },
-            viewingKey: {
-              type: 'string',
-              description: 'Optional viewing key for private balance',
-            },
-          },
-          required: ['tokenSymbolOrName', 'address'],
-        },
-      },
-      {
         name: 'secret_query_token_info',
         description: 'Get token information (name, symbol, decimals, supply)',
         inputSchema: {
@@ -278,8 +242,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: 'secret_query_nft_ownership',
-        description: 'Check NFT ownership for a wallet address',
+        name: 'secret_query_nft_collection_info',
+        description: 'Query NFT collection public information',
         inputSchema: {
           type: 'object',
           properties: {
@@ -287,18 +251,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'NFT collection name (e.g., jack robbins)',
             },
-            ownerAddress: {
-              type: 'string',
-              description: 'Wallet address to check NFT ownership',
-              pattern: '^secret1[a-z0-9]+$',
-            },
-            viewingKey: {
-              type: 'string',
-              description: 'Optional viewing key for private NFTs',
-            },
             limit: {
               type: 'number',
-              description: 'Maximum number of NFTs to return (default: 30, max: 100)',
+              description: 'Maximum number of tokens to return in public list (default: 30, max: 100)',
             },
           },
           required: ['collectionName', 'ownerAddress'],
@@ -486,33 +441,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case 'secret_query_token_balance': {
-        const { tokenSymbolOrName, address, viewingKey } = TokenBalanceSchema.parse(args);
-        
-        // Find token in registry
-        const token = findToken(tokenSymbolOrName);
-        if (!token) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Token not found: ${tokenSymbolOrName}\nAvailable tokens: ${listTokenSymbols().join(', ')}`,
-              },
-            ],
-          };
-        }
-        
-        try {
-          // Get code hash for the token
-          const codeHash = token.codeHash || await getCodeHash(token.address);
-          
-          // NOTE: Viewing key-based queries are deprecated and broken
-          // Use the HTTP server with permit-based queries instead
-          throw new Error('Token balance queries with viewing keys are no longer supported. Use permit-based queries via HTTP server.');
-        } catch (error) {
-          throw error;
-        }
-      }
 
       case 'secret_query_token_info': {
         const { tokenSymbolOrName } = TokenInfoSchema.parse(args);
@@ -553,32 +481,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case 'secret_query_nft_ownership': {
-        const { collectionName, ownerAddress, viewingKey, limit } = NFTOwnershipSchema.parse(args);
-        
-        // Find NFT collection in registry
-        const nft = findNFT(collectionName);
-        if (!nft) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `NFT collection not found: ${collectionName}\nAvailable collections: ${listNFTCollections().join(', ')}`,
-              },
-            ],
-          };
-        }
-        
-        // Get code hash for the NFT contract
-        const codeHash = nft.codeHash || await getCodeHash(nft.address);
-        
-        // NOTE: Viewing key-based queries are deprecated and broken
-        // Use the HTTP server with permit-based queries instead
-        throw new Error('NFT ownership queries with viewing keys are no longer supported. Use permit-based queries via HTTP server.');
-      }
 
-      case 'secret_query_nft_info': {
-        const { collectionName } = NFTInfoSchema.parse(args);
+      case 'secret_query_nft_collection_info': {
+        const { collectionName } = NFTCollectionInfoSchema.parse(args);
         
         // Find NFT collection in registry
         const nft = findNFT(collectionName);
