@@ -5,7 +5,6 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { z } from 'zod';
 import { SecretNetworkClient } from 'secretjs';
-import { WalletService } from './wallet-service.js';
 import { TOKEN_REGISTRY, findToken, findNFT, listTokenSymbols, listNFTCollections, type TokenInfo, type NFTInfo } from './token-registry.js';
 import { formatTokenInfoQuery, formatNFTContractInfoQuery } from './query-helpers.js';
 
@@ -20,8 +19,6 @@ app.use(express.json());
 // Secret Network client instance
 let secretClient: SecretNetworkClient | null = null;
 
-// Initialize wallet service
-let walletService: WalletService | null = null;
 
 // Cache for code hashes to avoid repeated lookups
 const codeHashCache = new Map<string, string>();
@@ -46,17 +43,6 @@ async function initializeSecretClient(): Promise<void> {
   }
 }
 
-// Initialize wallet service
-async function initializeWalletService(): Promise<void> {
-  try {
-    if (secretClient) {
-      walletService = new WalletService(secretClient);
-      console.log('Wallet service initialized successfully');
-    }
-  } catch (error) {
-    console.error('Failed to initialize wallet service:', error);
-  }
-}
 
 // Get code hash for a contract address (with caching)
 async function getCodeHash(contractAddress: string): Promise<string> {
@@ -631,185 +617,7 @@ app.post('/api/mcp/tools/call', async (req, res) => {
   }
 });
 
-// Wallet routes
-function setupWalletRoutes(app: express.Application): void {
-  
-  /**
-   * POST /api/wallet/connect
-   * Receive wallet connection from secretgptee webUI
-   */
-  app.post('/api/wallet/connect', async (req, res) => {
-    try {
-      if (!walletService) {
-        return res.status(503).json({
-          success: false,
-          error: "Wallet service not available"
-        });
-      }
-
-      const { address, name, isHardwareWallet } = req.body;
-      
-      if (!address) {
-        return res.status(400).json({
-          success: false,
-          error: "Address is required"
-        });
-      }
-
-      const result = await walletService.connectWallet(address, name, isHardwareWallet);
-      res.json(result);
-
-    } catch (error) {
-      console.error('Wallet connect error:', error);
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  /**
-   * GET /api/wallet/balance/:address
-   */
-  app.get('/api/wallet/balance/:address', async (req, res) => {
-    try {
-      if (!walletService) {
-        return res.status(503).json({
-          success: false,
-          error: "Wallet service not available"
-        });
-      }
-
-      const { address } = req.params;
-      const result = await walletService.getWalletBalance(address);
-      res.json(result);
-
-    } catch (error) {
-      console.error('Balance query error:', error);
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  /**
-   * GET /api/wallet/transaction/:txHash
-   * Check transaction status after Keplr broadcasting
-   */
-  app.get('/api/wallet/transaction/:txHash', async (req, res) => {
-    try {
-      if (!walletService) {
-        return res.status(503).json({
-          success: false,
-          error: "Wallet service not available"
-        });
-      }
-
-      const { txHash } = req.params;
-      const result = await walletService.getTransactionStatus(txHash);
-      res.json(result);
-
-    } catch (error) {
-      console.error('Transaction status error:', error);
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  /**
-   * GET /api/wallet/info/:address
-   */
-  app.get('/api/wallet/info/:address', async (req, res) => {
-    try {
-      if (!walletService) {
-        return res.status(503).json({
-          success: false,
-          error: "Wallet service not available"
-        });
-      }
-
-      const { address } = req.params;
-      const walletInfo = walletService.getWalletInfo(address);
-      
-      if (walletInfo) {
-        res.json({
-          success: true,
-          wallet: walletInfo
-        });
-      } else {
-        res.status(404).json({
-          success: false,
-          error: "Wallet not connected"
-        });
-      }
-
-    } catch (error) {
-      console.error('Wallet info error:', error);
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  /**
-   * DELETE /api/wallet/disconnect/:address
-   */
-  app.delete('/api/wallet/disconnect/:address', async (req, res) => {
-    try {
-      if (!walletService) {
-        return res.status(503).json({
-          success: false,
-          error: "Wallet service not available"
-        });
-      }
-
-      const { address } = req.params;
-      const result = walletService.disconnectWallet(address);
-      
-      res.json({
-        success: result,
-        message: result ? "Wallet disconnected" : "Wallet not found"
-      });
-
-    } catch (error) {
-      console.error('Wallet disconnect error:', error);
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  /**
-   * GET /api/wallet/status
-   */
-  app.get('/api/wallet/status', async (req, res) => {
-    try {
-      if (!walletService) {
-        return res.status(503).json({
-          success: false,
-          error: "Wallet service not available"
-        });
-      }
-
-      const status = walletService.getStatus();
-      res.json(status);
-
-    } catch (error) {
-      console.error('Wallet status error:', error);
-      res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  console.log('Wallet routes configured');
-}
+// Wallet functionality removed - should be handled in frontend with Keplr
 
 // Error handling middleware
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -829,10 +637,6 @@ async function startServer(): Promise<void> {
   try {
     // Initialize Secret Network client
     await initializeSecretClient();
-    await initializeWalletService();
-    
-    // Setup wallet routes
-    setupWalletRoutes(app);
     
     // Start HTTP server - bind to 0.0.0.0 to accept external connections
     app.listen(PORT, '0.0.0.0', () => {
@@ -843,12 +647,6 @@ async function startServer(): Promise<void> {
       console.log(`  GET  /api/health - Health check`);
       console.log(`  GET  /api/mcp/tools/list - List MCP tools`);
       console.log(`  POST /api/mcp/tools/call - Execute MCP tool`);
-      console.log(`  POST /api/wallet/connect - Connect wallet from secretgptee`);
-      console.log(`  GET  /api/wallet/balance/:address - Get SCRT balance`);
-      console.log(`  GET  /api/wallet/transaction/:txHash - Check tx status`);
-      console.log(`  GET  /api/wallet/info/:address - Get wallet info`);
-      console.log(`  GET  /api/wallet/status - Wallet service status`);
-      console.log(`  DELETE /api/wallet/disconnect/:address - Disconnect wallet`);
       console.log(`Ready to accept connections from secretGPT hub`);
     });
   } catch (error) {
